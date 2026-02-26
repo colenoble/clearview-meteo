@@ -5,7 +5,7 @@ from pathlib import Path
 import sys
 from datetime import datetime
 
-# pvlib used for precise solar noon (same method as POA V3) [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
+# pvlib used for precise solar noon (same method as POA V3)
 try:
     import pvlib
 except ImportError:
@@ -25,22 +25,42 @@ output_folder.mkdir(parents=True, exist_ok=True)
 # 2) SITE & ANALYSIS SETTINGS
 # ------------------------------------------------------------
 
+# --- Output Organization ---
+GroupOutputsByStation = True  # If True, puts station-specific plots into subfolders
+
+# --- Sensor Inclusion List ---
+SENSORS_TO_INCLUDE = [
+    "MET02/POA_1",
+    "MET02/POA_2",
+    "MET16/POA_1",
+    "MET16/POA_2",
+    "MET22/POA_1",
+    "MET22/POA_2",
+    "MET37/POA_1",
+    "MET37/POA_2",
+]
+
 # Original mode switch (per-day plots) remains available
-PlotDetailed = True  # used only when TwoDayCompare=False (original mode) [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
+PlotDetailed = True  
 
 start_time_limit = "11:00:00"
-end_time_limit = "14:00:00"
+end_time_limit = "15:00:00"
+
+# --- Stats Target Time ---
+# If None, stats and the red line will center on Solar Noon.
+# Otherwise, specify a time to evaluate (e.g., "12:30:00")
+TargetTime = "12:25:00"
 
 # --- Two-Day Compare Option (side-by-side) ---
 TwoDayCompare = True
-CompareDates = ("2026-02-10", "2026-02-22")  # YYYY-MM-DD
+CompareDates = ("2026-02-10", "2026-02-25")  # YYYY-MM-DD
 
-# --- Coordinates / TZ (as requested / consistent with your POA baseline) ---
+# --- Coordinates / TZ ---
 LAT = 40.26
 LON = -83.99
-TZ = "America/Toronto"  # matches your V3 usage [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
+TZ = "America/Toronto"  
 
-# Styling (same style approach as POA V3) [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
+# Styling 
 station_colors = {
     "MET02": "tab:blue",
     "MET16": "tab:green",
@@ -50,8 +70,8 @@ station_colors = {
 line_styles = {"POA_1": "-", "POA_2": ":"}
 
 # Clean time-axis (avoid clutter)
-MAJOR_TICK_MINUTES = 15   # 10 or 15 recommended
-MINOR_TICK_MINUTES = 5    # grid only (no labels). set None to disable
+MAJOR_TICK_MINUTES = 15   
+MINOR_TICK_MINUTES = 5    
 
 # Legends pinned inside each subplot (top-right)
 LegendFontSize = "small"
@@ -68,7 +88,7 @@ def parse_date(date_str: str):
     return datetime.strptime(date_str, "%Y-%m-%d").date()
 
 def prep_dataframe(df: pd.DataFrame) -> pd.DataFrame:
-    """Clean/sort and add datetime and date columns (same style as V3). [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)"""
+    """Clean/sort and add datetime and date columns."""
     df = df.copy()
     df["t_stamp_dt"] = pd.to_datetime(df["t_stamp"], errors="coerce")
     df = df.sort_values("t_stamp_dt")
@@ -76,35 +96,35 @@ def prep_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def filter_day_time(df: pd.DataFrame, day):
-    """Slice to a day and the configured time window using datetimes (V3-style). [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)"""
+    """Slice to a day and the configured time window using datetimes."""
     day_df = df[df["date"] == day].copy()
     start_ts = pd.to_datetime(f"{day} {start_time_limit}")
     end_ts = pd.to_datetime(f"{day} {end_time_limit}")
     return day_df[(day_df["t_stamp_dt"] >= start_ts) & (day_df["t_stamp_dt"] <= end_ts)].copy()
 
 def get_precise_solar_noon(date_obj):
-    """Exact solar transit (noon) using pvlib (your V3 method). [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)"""
+    """Exact solar transit (noon) using pvlib."""
     if pvlib is None:
         raise ImportError("pvlib is not installed. Install with: pip install pvlib")
     times = pd.date_range(start=date_obj, periods=1, freq="D", tz=TZ)
     location = pvlib.location.Location(LAT, LON, tz=TZ)
     return location.get_sun_rise_set_transit(times)["transit"].iloc[0]
 
-def add_stats_box(ax, noon_row, cols, label, unit):
-    """Adds Median, Average, Range, Delta at solar noon (same as your V3). [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)"""
-    if noon_row is None or noon_row.empty or not cols:
+def add_stats_box(ax, target_row, cols, label, unit, time_label="Noon"):
+    """Adds Median, Average, Range, Delta at the target time."""
+    if target_row is None or target_row.empty or not cols:
         return
 
-    present_cols = [c for c in cols if c in noon_row.columns]
+    present_cols = [c for c in cols if c in target_row.columns]
     if not present_cols:
         return
 
-    vals = noon_row[present_cols].iloc[0].astype(float)
+    vals = target_row[present_cols].iloc[0].astype(float)
     v_min, v_max = vals.min(), vals.max()
     delta = v_max - v_min
 
     stats_text = (
-        f"{label} @ Noon\n"
+        f"{label} @ {time_label}\n"
         f"Median: {vals.median():.2f}{unit}\n"
         f"Average: {vals.mean():.2f}{unit}\n"
         f"Range: {v_min:.1f} - {v_max:.1f}{unit}\n"
@@ -162,7 +182,7 @@ def set_top_right_legend(ax, title="Sensors"):
 def find_best_source_for_day(loaded_items, target_day):
     """
     Across ALL loaded files, choose the file that has the most rows
-    for target_day within the time window. (Matches your “one day per file” reality.)
+    for target_day within the time window.
     """
     best = None
     best_count = 0
@@ -180,12 +200,12 @@ def find_best_source_for_day(loaded_items, target_day):
     return best if best_count > 0 else None
 
 def get_station_list(poa_cols):
-    """Extract stations from POA columns (same split logic used in your V3). [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)"""
+    """Extract stations from POA columns."""
     return sorted(list(set([c.split("/")[0] for c in poa_cols])))
 
 def plot_compare_2x2(df1, df2, poa_cols_1, tilt_cols_1, poa_cols_2, tilt_cols_2,
-                     day1, day2, noon1_naive, noon2_naive, noon1_str, noon2_str,
-                     noon_row_1, noon_row_2, suptitle, save_path):
+                     day1, day2, target1_naive, target2_naive, noon1_str, noon2_str,
+                     target_row_1, target_row_2, time_label_1, time_label_2, suptitle, save_path):
     """
     Core: Create a 2x2 side-by-side compare:
       left=day1, right=day2; top=POA, bottom=Tilt
@@ -206,10 +226,10 @@ def plot_compare_2x2(df1, df2, poa_cols_1, tilt_cols_1, poa_cols_2, tilt_cols_2,
                 color=station_colors.get(st, "black"),
                 linestyle=line_styles.get(p_type, "-")
             )
-    ax_poa_1.axvline(x=noon1_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
-    ax_poa_1.set_title(f"POA • {day1} • Noon: {noon1_str}", fontsize=12)
+    ax_poa_1.axvline(x=target1_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
+    ax_poa_1.set_title(f"POA • {day1} • Noon: {noon1_str} | Stats @ {time_label_1}", fontsize=12)
     ax_poa_1.set_ylabel("Irradiance [W/m²]")
-    add_stats_box(ax_poa_1, noon_row_1, poa_cols_1, "POA", " W/m²")
+    add_stats_box(ax_poa_1, target_row_1, poa_cols_1, "POA", " W/m²", time_label_1)
 
     for c in tilt_cols_1:
         if c in df1.columns:
@@ -221,11 +241,11 @@ def plot_compare_2x2(df1, df2, poa_cols_1, tilt_cols_1, poa_cols_2, tilt_cols_2,
                 color=station_colors.get(st, "black"),
                 linestyle=line_styles.get(p_type, "-")
             )
-    ax_tilt_1.axvline(x=noon1_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
-    ax_tilt_1.set_title(f"Tilt • {day1} • Noon: {noon1_str}", fontsize=12)
+    ax_tilt_1.axvline(x=target1_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
+    ax_tilt_1.set_title(f"Tilt • {day1} • Noon: {noon1_str} | Stats @ {time_label_1}", fontsize=12)
     ax_tilt_1.set_ylabel("Sensor Tilt [°]")
     ax_tilt_1.set_xlabel("Time (HH:MM)")
-    add_stats_box(ax_tilt_1, noon_row_1, tilt_cols_1, "Tilt", "°")
+    add_stats_box(ax_tilt_1, target_row_1, tilt_cols_1, "Tilt", "°", time_label_1)
 
     # ---- Day 2 (right) ----
     x2 = df2["t_stamp_dt"]
@@ -239,9 +259,9 @@ def plot_compare_2x2(df1, df2, poa_cols_1, tilt_cols_1, poa_cols_2, tilt_cols_2,
                 color=station_colors.get(st, "black"),
                 linestyle=line_styles.get(p_type, "-")
             )
-    ax_poa_2.axvline(x=noon2_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
-    ax_poa_2.set_title(f"POA • {day2} • Noon: {noon2_str}", fontsize=12)
-    add_stats_box(ax_poa_2, noon_row_2, poa_cols_2, "POA", " W/m²")
+    ax_poa_2.axvline(x=target2_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
+    ax_poa_2.set_title(f"POA • {day2} • Noon: {noon2_str} | Stats @ {time_label_2}", fontsize=12)
+    add_stats_box(ax_poa_2, target_row_2, poa_cols_2, "POA", " W/m²", time_label_2)
 
     for c in tilt_cols_2:
         if c in df2.columns:
@@ -253,24 +273,20 @@ def plot_compare_2x2(df1, df2, poa_cols_1, tilt_cols_1, poa_cols_2, tilt_cols_2,
                 color=station_colors.get(st, "black"),
                 linestyle=line_styles.get(p_type, "-")
             )
-    ax_tilt_2.axvline(x=noon2_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
-    ax_tilt_2.set_title(f"Tilt • {day2} • Noon: {noon2_str}", fontsize=12)
+    ax_tilt_2.axvline(x=target2_naive, color="red", linestyle="--", linewidth=1.5, label="_nolegend_")
+    ax_tilt_2.set_title(f"Tilt • {day2} • Noon: {noon2_str} | Stats @ {time_label_2}", fontsize=12)
     ax_tilt_2.set_xlabel("Time (HH:MM)")
-    add_stats_box(ax_tilt_2, noon_row_2, tilt_cols_2, "Tilt", "°")
+    add_stats_box(ax_tilt_2, target_row_2, tilt_cols_2, "Tilt", "°", time_label_2)
 
-    # Apply clean time formatting AFTER plotting
     for ax in (ax_poa_1, ax_tilt_1, ax_poa_2, ax_tilt_2):
         format_time_axis(ax)
 
-    # Hide top-row x labels
     ax_poa_1.tick_params(axis="x", labelbottom=False)
     ax_poa_2.tick_params(axis="x", labelbottom=False)
 
-    # Rotate bottom tick labels
     for ax in (ax_tilt_1, ax_tilt_2):
         plt.setp(ax.get_xticklabels(), rotation=45, ha="right")
 
-    # Legends pinned top-right per subplot
     set_top_right_legend(ax_poa_1, title="Sensors")
     set_top_right_legend(ax_poa_2, title="Sensors")
     set_top_right_legend(ax_tilt_1, title="Sensors")
@@ -284,7 +300,7 @@ def plot_compare_2x2(df1, df2, poa_cols_1, tilt_cols_1, poa_cols_2, tilt_cols_2,
 
 
 # ------------------------------------------------------------
-# 4) LOAD FILES
+# 4) LOAD FILES & FILTER SENSORS
 # ------------------------------------------------------------
 excel_files = list(input_folder.glob("*.xlsx"))
 if not excel_files:
@@ -305,9 +321,11 @@ for file_path in excel_files:
 
     df = prep_dataframe(df_raw)
 
-    # POA columns (same pattern you used in V3) [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
-    poa_cols = [c for c in df.columns if "/POA_" in c and "TILT" not in c and "RPOA" not in c]
-    tilt_cols = [c for c in df.columns if "/POA_" in c and "TILT_ANGLE" in c]
+    raw_poa_cols = [c for c in df.columns if "/POA_" in c and "TILT" not in c and "RPOA" not in c]
+    raw_tilt_cols = [c for c in df.columns if "/POA_" in c and "TILT_ANGLE" in c]
+
+    poa_cols = [c for c in raw_poa_cols if c in SENSORS_TO_INCLUDE]
+    tilt_cols = [c for c in raw_tilt_cols if c.replace("_TILT_ANGLE", "") in SENSORS_TO_INCLUDE]
 
     loaded.append({
         "file": file_path,
@@ -350,7 +368,6 @@ if TwoDayCompare:
     df1 = src1["df_filtered"]
     df2 = src2["df_filtered"]
 
-    # Solar noon for each day (same as V3) [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
     noon1 = get_precise_solar_noon(day1)
     noon2 = get_precise_solar_noon(day2)
     noon1_naive = noon1.replace(tzinfo=None)
@@ -358,16 +375,28 @@ if TwoDayCompare:
     noon1_str = noon1.strftime("%H:%M")
     noon2_str = noon2.strftime("%H:%M")
 
-    # Noon rows (closest timestamp)
-    noon_row_1 = df1.iloc[(df1["t_stamp_dt"] - noon1_naive).abs().argsort()[:1]]
-    noon_row_2 = df2.iloc[(df2["t_stamp_dt"] - noon2_naive).abs().argsort()[:1]]
+    # Determine stats target time
+    if TargetTime:
+        t_time = datetime.strptime(TargetTime, "%H:%M:%S").time()
+        target1_naive = datetime.combine(day1, t_time)
+        target2_naive = datetime.combine(day2, t_time)
+        time_label_1 = TargetTime[:5]
+        time_label_2 = TargetTime[:5]
+    else:
+        target1_naive = noon1_naive
+        target2_naive = noon2_naive
+        time_label_1 = "Noon"
+        time_label_2 = "Noon"
+
+    target_row_1 = df1.iloc[(df1["t_stamp_dt"] - target1_naive).abs().argsort()[:1]]
+    target_row_2 = df2.iloc[(df2["t_stamp_dt"] - target2_naive).abs().argsort()[:1]]
 
     # -------------------------
     # A) COMBINED compare plot
     # -------------------------
     combined_save = output_folder / f"POA_COMPARE_{day1}_VS_{day2}_Combined.png"
     combined_title = (
-        f"POA Two-Day Compare (Combined) with Solar Noon Metrics\n"
+        f"POA Two-Day Compare (Combined) with Custom Stats Metrics\n"
         f"Window: {start_time_limit}–{end_time_limit}\n"
         f"Left source: {src1['file'].name} | Right source: {src2['file'].name}"
     )
@@ -377,18 +406,18 @@ if TwoDayCompare:
         poa_cols_1=src1["poa_cols"], tilt_cols_1=src1["tilt_cols"],
         poa_cols_2=src2["poa_cols"], tilt_cols_2=src2["tilt_cols"],
         day1=day1, day2=day2,
-        noon1_naive=noon1_naive, noon2_naive=noon2_naive,
+        target1_naive=target1_naive, target2_naive=target2_naive,
         noon1_str=noon1_str, noon2_str=noon2_str,
-        noon_row_1=noon_row_1, noon_row_2=noon_row_2,
+        target_row_1=target_row_1, target_row_2=target_row_2,
+        time_label_1=time_label_1, time_label_2=time_label_2,
         suptitle=combined_title,
         save_path=combined_save
     )
     print(f"Saved combined compare plot: {combined_save.name}")
 
     # ------------------------------------
-    # B) PER-STATION compare plots (NEW)
+    # B) PER-STATION compare plots 
     # ------------------------------------
-    # Use stations present in the day1 POA columns; filter per station for both days.
     stations = get_station_list(src1["poa_cols"])
     if not stations:
         print("No stations found in POA columns for day1; skipping per-station plots.")
@@ -401,14 +430,19 @@ if TwoDayCompare:
         poa2_st = [c for c in src2["poa_cols"] if c.startswith(st + "/")]
         tilt2_st = [c for c in src2["tilt_cols"] if c.startswith(st + "/")]
 
-        # Skip stations that don't exist on either day
         if (not poa1_st and not tilt1_st) or (not poa2_st and not tilt2_st):
             print(f" - Skipping {st}: station not present on one of the days.")
             continue
 
-        st_save = output_folder / f"POA_COMPARE_{day1}_VS_{day2}_{st}.png"
+        if GroupOutputsByStation:
+            st_out_dir = output_folder / st
+            st_out_dir.mkdir(parents=True, exist_ok=True)
+            st_save = st_out_dir / f"POA_COMPARE_{day1}_VS_{day2}_{st}.png"
+        else:
+            st_save = output_folder / f"POA_COMPARE_{day1}_VS_{day2}_{st}.png"
+
         st_title = (
-            f"POA Two-Day Compare ({st}) with Solar Noon Metrics\n"
+            f"POA Two-Day Compare ({st}) with Custom Stats Metrics\n"
             f"Window: {start_time_limit}–{end_time_limit}\n"
             f"Left source: {src1['file'].name} | Right source: {src2['file'].name}"
         )
@@ -418,9 +452,10 @@ if TwoDayCompare:
             poa_cols_1=poa1_st, tilt_cols_1=tilt1_st,
             poa_cols_2=poa2_st, tilt_cols_2=tilt2_st,
             day1=day1, day2=day2,
-            noon1_naive=noon1_naive, noon2_naive=noon2_naive,
+            target1_naive=target1_naive, target2_naive=target2_naive,
             noon1_str=noon1_str, noon2_str=noon2_str,
-            noon_row_1=noon_row_1, noon_row_2=noon_row_2,
+            target_row_1=target_row_1, target_row_2=target_row_2,
+            time_label_1=time_label_1, time_label_2=time_label_2,
             suptitle=st_title,
             save_path=st_save
         )
@@ -433,7 +468,6 @@ if TwoDayCompare:
 # ------------------------------------------------------------
 # 6) ORIGINAL MODE (V3 BEHAVIOR) — runs when TwoDayCompare=False
 # ------------------------------------------------------------
-# Preserves your existing per-day outputs: Combined + (optional) station detail + Site Average. [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
 
 if pvlib is None:
     print("ERROR: pvlib is not installed. Install with: pip install pvlib")
@@ -456,11 +490,20 @@ for item in loaded:
         noon_str = precise_noon_dt.strftime("%H:%M:%S")
         noon_naive = precise_noon_dt.replace(tzinfo=None)
 
+        # Determine stats target time
+        if TargetTime:
+            t_time = datetime.strptime(TargetTime, "%H:%M:%S").time()
+            target_naive = datetime.combine(day, t_time)
+            time_label = TargetTime[:5]
+        else:
+            target_naive = noon_naive
+            time_label = "Noon"
+
         df_filtered = filter_day_time(day_df, day)
         if df_filtered.empty:
             continue
 
-        noon_row = df_filtered.iloc[(df_filtered["t_stamp_dt"] - noon_naive).abs().argsort()[:1]]
+        target_row = df_filtered.iloc[(df_filtered["t_stamp_dt"] - target_naive).abs().argsort()[:1]]
 
         plot_configs = [("Combined", poa_cols, tilt_cols)]
         if PlotDetailed:
@@ -477,8 +520,8 @@ for item in loaded:
             x_axis = df_filtered["t_stamp_dt"]
 
             for ax in (ax1, ax2):
-                ax.axvline(x=noon_naive, color="red", linestyle="--", linewidth=1.5,
-                           label=f"Solar Noon ({noon_str})")
+                ax.axvline(x=target_naive, color="red", linestyle="--", linewidth=1.5,
+                           label=f"Stats @ {time_label}")
                 ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
                 ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
                 ax.grid(True, which="both", linestyle="--", alpha=0.3)
@@ -492,7 +535,7 @@ for item in loaded:
                     color=station_colors.get(st, "black"),
                     linestyle=line_styles.get(p_type, "-")
                 )
-            add_stats_box(ax1, noon_row, p_cols, f"{name} POA", " W/m²")
+            add_stats_box(ax1, target_row, p_cols, f"{name} POA", " W/m²", time_label)
 
             # Tilt
             for c in t_cols:
@@ -504,9 +547,9 @@ for item in loaded:
                     color=station_colors.get(st, "black"),
                     linestyle=line_styles.get(p_type, "-")
                 )
-            add_stats_box(ax2, noon_row, t_cols, f"{name} Tilt", "°")
+            add_stats_box(ax2, target_row, t_cols, f"{name} Tilt", "°", time_label)
 
-            ax1.set_title(f"POA Analysis\n{name}\n{day}\nSolar Noon: {noon_str}", fontsize=14, fontweight="bold")
+            ax1.set_title(f"POA Analysis\n{name}\n{day}\nSolar Noon: {noon_str} | Stats @ {time_label}", fontsize=14, fontweight="bold")
             ax1.set_ylabel("Irradiance [W/m²]")
             ax2.set_ylabel("Sensor Tilt [°]")
             ax2.set_xlabel("Time (HH:MM)")
@@ -515,11 +558,17 @@ for item in loaded:
             plt.xticks(rotation=45)
             plt.tight_layout()
 
-            save_path = output_folder / f"{file_path.stem}_{day}_{name}.png"
+            if GroupOutputsByStation and name != "Combined":
+                save_dir = output_folder / name
+            else:
+                save_dir = output_folder
+            save_dir.mkdir(parents=True, exist_ok=True)
+            
+            save_path = save_dir / f"{file_path.stem}_{day}_{name}.png"
             plt.savefig(save_path, dpi=150)
             plt.close(fig)
 
-        # Site Average Plot (unchanged) [1](https://pclconnects-my.sharepoint.com/personal/colenoble_pcl_com/Documents/Microsoft%20Copilot%20Chat%20Files/POA_VS_POA_Tilt_V3.py)
+        # Site Average Plot
         fig_avg, (ax1_a, ax2_a) = plt.subplots(2, 1, figsize=(15, 11), sharex=True)
 
         df_filtered = df_filtered.copy()
@@ -528,7 +577,7 @@ for item in loaded:
         x_axis = df_filtered["t_stamp_dt"]
 
         for ax in (ax1_a, ax2_a):
-            ax.axvline(x=noon_naive, color="red", linestyle="--", linewidth=1.5)
+            ax.axvline(x=target_naive, color="red", linestyle="--", linewidth=1.5, label=f"Stats @ {time_label}")
             ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=5))
             ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M"))
             ax.grid(True, which="both", linestyle="--", alpha=0.3)
@@ -536,10 +585,10 @@ for item in loaded:
         ax1_a.plot(x_axis, df_filtered["avg_poa"], color="black", linewidth=2, label="Mean POA")
         ax2_a.plot(x_axis, df_filtered["avg_tilt"], color="black", linewidth=2, label="Mean Tilt")
 
-        add_stats_box(ax1_a, noon_row, poa_cols, "Site POA", " W/m²")
-        add_stats_box(ax2_a, noon_row, tilt_cols, "Site Tilt", "°")
+        add_stats_box(ax1_a, target_row, poa_cols, "Site POA", " W/m²", time_label)
+        add_stats_box(ax2_a, target_row, tilt_cols, "Site Tilt", "°", time_label)
 
-        ax1_a.set_title(f"Site Average\n{day}\nSolar Noon: {noon_str}", fontsize=14, fontweight="bold")
+        ax1_a.set_title(f"Site Average\n{day}\nSolar Noon: {noon_str} | Stats @ {time_label}", fontsize=14, fontweight="bold")
 
         plt.xticks(rotation=45)
         plt.tight_layout()

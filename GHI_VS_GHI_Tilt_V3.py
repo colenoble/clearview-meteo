@@ -28,7 +28,7 @@ end_time_limit = "14:00:00"
 
 # Two-day compare
 TwoDayCompare = True
-CompareDates = ("2026-02-10", "2026-02-25")
+CompareDates = ("2026-02-10", "2026-03-01")
 
 # --- Site coordinates (as requested) ---
 LAT = 40.26

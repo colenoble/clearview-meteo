@@ -49,11 +49,11 @@ end_time_limit = "15:00:00"
 # --- Stats Target Time ---
 # If None, stats and the red line will center on Solar Noon.
 # Otherwise, specify a time to evaluate (e.g., "12:30:00")
-TargetTime = "12:25:00"
+TargetTime = ""
 
 # --- Two-Day Compare Option (side-by-side) ---
 TwoDayCompare = True
-CompareDates = ("2026-02-10", "2026-02-25")  # YYYY-MM-DD
+CompareDates = ("2026-02-10", "2026-03-01")  # YYYY-MM-DD
 
 # --- Coordinates / TZ ---
 LAT = 40.26

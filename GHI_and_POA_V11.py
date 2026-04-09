@@ -48,12 +48,23 @@ EXPORT_ESTIMATED_NOONS = True
 
 # Station Filtering & Styling
 SENSORS_TO_INCLUDE = [
-    # POA / RPOA Sensors
-    "MET02/POA_1", "MET02/POA_2",
-    "MET16/POA_1", "MET16/POA_2",
+    # POA Sensors
+  #  "MET02/POA_1", "MET02/POA_2",
+   # "MET16/POA_1", "MET16/POA_2",
     "MET22/POA_1", "MET22/POA_2",
-    "MET37/POA_1", "MET37/POA_2",
-    # Note: RPOA dynamic logic will auto-include matching RPOA columns
+   # "MET37/POA_1", "MET37/POA_2",
+    
+    # RPOA Sensors
+  #  "MET02/RPOA_1", "MET02/RPOA_2",
+   # "MET16/RPOA_1", "MET16/RPOA_2",
+    "MET22/RPOA_1", "MET22/RPOA_2",
+   # "MET37/RPOA_1", "MET37/RPOA_2",
+
+    # GHI Sensors
+    "MET22/GHI",
+    # "MET02/GHI",
+    # "MET16/GHI",
+    # "MET37/GHI"
 ]
 
 station_colors = {
@@ -428,14 +439,15 @@ def main():
     for f in excel_files:
         try:
             df = prep_dataframe(pd.read_excel(f))
+            # Updated to filter by SENSORS_TO_INCLUDE
             poa_cols = [c for c in df.columns if "/POA_" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE]
-            ghi_cols = [c for c in df.columns if "/GHI" in c and "TILT" not in c] 
+            ghi_cols = [c for c in df.columns if "/GHI" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE] 
             poa_tilt = [c for c in df.columns if "/POA_" in c and "TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
-            ghi_tilt = [c for c in df.columns if "/GHI_TILT" in c]
+            ghi_tilt = [c for c in df.columns if "/GHI_TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
             
-            # Dynamic inclusion of RPOA tracking parameters 
-            rpoa_cols = [c for c in df.columns if "/RPOA_" in c and "TILT" not in c]
-            rpoa_tilt = [c for c in df.columns if "/RPOA_" in c and "TILT" in c]
+            # Explicit inclusion of RPOA tracking parameters 
+            rpoa_cols = [c for c in df.columns if "/RPOA_" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE]
+            rpoa_tilt = [c for c in df.columns if "/RPOA_" in c and "TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
             
             loaded.append({
                 "file": f, "df": df,
@@ -465,18 +477,20 @@ def main():
     print("\nGenerating Plots...")
     
     # Global GHI Comparison
-    plot_compare_2x2(
-        df1, df2, src1["ghi_cols"], src1["ghi_tilt"], src2["ghi_cols"], src2["ghi_tilt"],
-        day1, day2, noon1, noon2, row1, row2,
-        title_prefix="GHI & Tilt Comparison", filename_suffix="Combined", mode="GHI"
-    )
+    if src1["ghi_cols"] and src2["ghi_cols"]:
+        plot_compare_2x2(
+            df1, df2, src1["ghi_cols"], src1["ghi_tilt"], src2["ghi_cols"], src2["ghi_tilt"],
+            day1, day2, noon1, noon2, row1, row2,
+            title_prefix="GHI & Tilt Comparison", filename_suffix="Combined", mode="GHI"
+        )
     
     # Global POA Comparison
-    plot_compare_2x2(
-        df1, df2, src1["poa_cols"], src1["poa_tilt"], src2["poa_cols"], src2["poa_tilt"],
-        day1, day2, noon1, noon2, row1, row2,
-        title_prefix="POA & Tilt Comparison", filename_suffix="Combined", mode="POA"
-    )
+    if src1["poa_cols"] and src2["poa_cols"]:
+        plot_compare_2x2(
+            df1, df2, src1["poa_cols"], src1["poa_tilt"], src2["poa_cols"], src2["poa_tilt"],
+            day1, day2, noon1, noon2, row1, row2,
+            title_prefix="POA & Tilt Comparison", filename_suffix="Combined", mode="POA"
+        )
     
     # Global RPOA Comparison
     if src1["rpoa_cols"] and src2["rpoa_cols"]:

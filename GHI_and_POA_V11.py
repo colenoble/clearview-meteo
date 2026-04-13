@@ -20,7 +20,7 @@ except ImportError:
 input_folder = Path("inputs/GHI&GHI_tilt")
 
 # Comparison Dates (day1 vs day2)
-CompareDates = ("2026-03-09", "2026-04-07")
+CompareDates = ("2026-04-07", "2026-04-11")
 
 # --- DYNAMIC OUTPUT FOLDER CREATION ---
 script_name = Path(__file__).stem

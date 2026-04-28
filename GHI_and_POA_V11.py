@@ -20,7 +20,7 @@ except ImportError:
 input_folder = Path("inputs/GHI&GHI_tilt")
 
 # Comparison Dates (day1 vs day2)
-CompareDates = ("2026-04-07", "2026-04-11")
+CompareDates = ("2026-04-07", "2026-04-27")
 
 # --- DYNAMIC OUTPUT FOLDER CREATION ---
 script_name = Path(__file__).stem
@@ -32,8 +32,8 @@ output_folder.mkdir(parents=True, exist_ok=True)
 
 
 # Time Window for Plots
-start_time_limit = "11:00:00"
-end_time_limit = "15:00:00"
+start_time_limit = "7:00:00"
+end_time_limit = "18:00:00"
 
 # Site Coords / Timezone
 LAT = 40.26
@@ -52,19 +52,19 @@ SENSORS_TO_INCLUDE = [
   #  "MET02/POA_1", "MET02/POA_2",
    # "MET16/POA_1", "MET16/POA_2",
     "MET22/POA_1", "MET22/POA_2",
-   # "MET37/POA_1", "MET37/POA_2",
+   "MET37/POA_1", "MET37/POA_2",
     
     # RPOA Sensors
   #  "MET02/RPOA_1", "MET02/RPOA_2",
    # "MET16/RPOA_1", "MET16/RPOA_2",
     "MET22/RPOA_1", "MET22/RPOA_2",
-   # "MET37/RPOA_1", "MET37/RPOA_2",
+   "MET37/RPOA_1", "MET37/RPOA_2",
 
     # GHI Sensors
     "MET22/GHI",
     # "MET02/GHI",
     # "MET16/GHI",
-    # "MET37/GHI"
+    "MET37/GHI"
 ]
 
 station_colors = {

@@ -1,0 +1,12 @@
+
+Version
+
+
+Albedo_check
+
+V1: Reads in in met files. Plots albedos for the day. Determines averages an overlays on plots for each day. 
+Outputs an excel file with the full albeod timeseries. 
+
+V2: Rather uses downloaded specific Alebdo data. Does rations with RHI and GHI2 instead. 
+
+V3 : Limits to be put on axis as this messes uis up 

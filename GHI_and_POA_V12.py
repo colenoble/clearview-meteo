@@ -19,17 +19,23 @@ except ImportError:
 # ------------------------------------------------------------
 input_folder = Path("inputs/GHI&GHI_tilt")
 
-# --- DYNAMIC OUTPUT FOLDER NAME ---
+# Run Mode Options
+SINGLE_DAY_MODE = True
+
+# Dates
+TARGET_DATE = "2026-05-03"                           # Used if SINGLE_DAY_MODE is True
+COMPARE_DATES = ("2026-05-02", "2026-05-03")         # Used if SINGLE_DAY_MODE is False
+
+# --- DYNAMIC OUTPUT FOLDER CREATION ---
 script_name = Path(__file__).stem
-output_folder = Path("outputs") / script_name
+run_identifier_date = TARGET_DATE if SINGLE_DAY_MODE else COMPARE_DATES[1]
+output_folder = Path("outputs") / script_name / run_identifier_date
 output_folder.mkdir(parents=True, exist_ok=True)
 
-# Comparison Dates
-CompareDates = ("2026-02-10", "2026-03-09")
 
 # Time Window for Plots
-start_time_limit = "08:00:00"
-end_time_limit = "17:00:00"
+start_time_limit = "7:00:00"
+end_time_limit = "18:00:00"
 
 # Site Coords / Timezone
 LAT = 40.26
@@ -42,14 +48,32 @@ AVERAGING_WINDOW_MINS = 1
 # Export Options
 EXPORT_ESTIMATED_NOONS = True
 
+# Y-Axis Limits to prevent data spikes from ruining scale
+Y_AXIS_LIMITS = {
+    "POA": (0, 1400),
+    "RPOA": (0, 400),
+    "GHI": (0, 1400)
+}
+
 # Station Filtering & Styling
 SENSORS_TO_INCLUDE = [
-    # POA / RPOA Sensors
-    "MET02/POA_1", "MET02/POA_2",
-    "MET16/POA_1", "MET16/POA_2",
+    # POA Sensors
+ # "MET02/POA_1", "MET02/POA_2",
+ #  "MET16/POA_1", "MET16/POA_2",
     "MET22/POA_1", "MET22/POA_2",
-    "MET37/POA_1", "MET37/POA_2",
-    # Note: RPOA dynamic logic will auto-include matching RPOA columns
+   "MET37/POA_1", "MET37/POA_2",
+    
+    # RPOA Sensors
+  # "MET02/RPOA_1", "MET02/RPOA_2",
+ #  "MET16/RPOA_1", "MET16/RPOA_2",
+   "MET22/RPOA_1", "MET22/RPOA_2",
+   "MET37/RPOA_1", "MET37/RPOA_2",
+
+    # GHI Sensors
+   "MET22/GHI",
+  # "MET02/GHI",
+ #"MET16/GHI",
+    "MET37/GHI"
 ]
 
 station_colors = {
@@ -58,7 +82,6 @@ station_colors = {
     "MET22": "tab:red",
     "MET37": "tab:orange",
 }
-line_styles = {"POA_1": "-", "POA_2": ":", "GHI": "-", "RPOA_1": "-", "RPOA_2": ":"}
 
 # Tick Formatting
 MAJOR_TICK_MINUTES = 15
@@ -144,56 +167,6 @@ def add_stats_box(ax, target_row, cols, label, unit):
         bbox=dict(boxstyle="round", facecolor="white", alpha=0.85)
     )
 
-def add_albedo_box(ax, target_row, stations):
-    """
-    Calculates Effective Albedo (Avg RPOA / Avg POA) at solar noon for each station.
-    Strictly filters out <= 0 and NaN values prior to averaging.
-    Calculates and displays the median across all valid stations.
-    """
-    if target_row is None or target_row.empty:
-        return
-
-    text_lines = ["Effective Albedo @ Noon"]
-    valid_albedos = []
-
-    for st in stations:
-        rpoa_cols = [c for c in target_row.columns if c.startswith(f"{st}/RPOA") and "TILT" not in c]
-        poa_cols = [c for c in target_row.columns if c.startswith(f"{st}/POA") and "TILT" not in c]
-
-        if rpoa_cols and poa_cols:
-            r_vals = target_row[rpoa_cols].iloc[0].astype(float)
-            p_vals = target_row[poa_cols].iloc[0].astype(float)
-
-            # Ignore 0 or negative values. Drop nulls.
-            r_valid = r_vals[r_vals > 0].dropna()
-            p_valid = p_vals[p_vals > 0].dropna()
-
-            if not r_valid.empty and not p_valid.empty:
-                # If only one valid sensor remains, mean() safely uses that single value
-                avg_rpoa = r_valid.mean()
-                avg_poa = p_valid.mean()
-                albedo_pct = (avg_rpoa / avg_poa) * 100
-                text_lines.append(f"{st}: {albedo_pct:.1f}%")
-                valid_albedos.append(albedo_pct)
-            else:
-                text_lines.append(f"{st}: N/A")
-
-    # Add robust median calculation if at least one station is valid
-    if valid_albedos:
-        median_albedo = pd.Series(valid_albedos).median()
-        text_lines.append("----------------")
-        text_lines.append(f"Median: {median_albedo:.1f}%")
-
-    if len(text_lines) > 1:
-        stats_text = "\n".join(text_lines)
-        ax.text(
-            0.22, 0.98, stats_text,
-            transform=ax.transAxes,
-            fontsize=9,
-            verticalalignment="top",
-            bbox=dict(boxstyle="round", facecolor="white", alpha=0.85)
-        )
-
 def set_top_right_legend(ax, title="Sensors"):
     handles, labels = ax.get_legend_handles_labels()
     if handles:
@@ -224,6 +197,61 @@ def calculate_medians(df, ghi_cols, poa_cols):
         
     return df_med
 
+def plot_single_day(df, cols, tilts, day, noon, noon_row, title_prefix, filename_suffix, mode="POA"):
+    fig, axes = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+    ax_irr, ax_tilt = axes[0], axes[1]
+    
+    noon_naive = noon.replace(tzinfo=None)
+    noon_str = pd.to_datetime(noon).round("1min").strftime("%H:%M")
+    x = df["t_stamp_dt"]
+    
+    # Irradiance Plot
+    for c in cols:
+        if c in df.columns:
+            st = c.split("/")[0]
+            ls = "--" if "_2" in c else "-"
+            label_name = c.split("/")[1] if mode in ("POA", "RPOA") else st
+            ax_irr.plot(x, df[c], label=f"{st} {label_name}", 
+                        color=station_colors.get(st, "black"), linestyle=ls)
+            
+    ax_irr.axvline(noon_naive, color="red", ls="--")
+    ax_irr.set_title(f"{mode} • {day} • Noon: {noon_str}", fontsize=12)
+    ax_irr.set_ylabel(f"{mode} [W/m²]")
+    
+    if mode in Y_AXIS_LIMITS:
+        ax_irr.set_ylim(Y_AXIS_LIMITS[mode])
+        
+    add_stats_box(ax_irr, noon_row, cols, mode, " W/m²")
+
+    # Tilt Plot
+    for c in tilts:
+        if c in df.columns:
+            st = c.split("/")[0]
+            ls = "--" if "_2" in c else "-"
+            label_name = "Tilt_2" if "_2" in c else ("Tilt_1" if "_1" in c else "Tilt")
+            ax_tilt.plot(x, df[c], label=f"{st} {label_name}",
+                         color=station_colors.get(st, "black"), linestyle=ls)
+                         
+    ax_tilt.axvline(noon_naive, color="red", ls="--")
+    ax_tilt.set_ylabel("Tilt [°]")
+    add_stats_box(ax_tilt, noon_row, tilts, "Tilt", "°")
+
+    # Formatting
+    for ax in axes:
+        format_time_axis(ax)
+        set_top_right_legend(ax)
+        
+    ax_tilt.set_xlabel("Time (HH:MM)")
+    plt.setp(ax_tilt.get_xticklabels(), rotation=45, ha="right")
+
+    fig.suptitle(title_prefix, fontsize=13, y=0.98)
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    
+    save_path = output_folder / f"{mode}_{day}_{filename_suffix}.png"
+    plt.savefig(save_path, dpi=150)
+    plt.close(fig)
+    print(f"Saved: {save_path.name}")
+
 def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
                      day1, day2, noon1, noon2, noon_row1, noon_row2,
                      title_prefix, filename_suffix, mode="POA"):
@@ -241,8 +269,7 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
     for c in cols1:
         if c in df1.columns:
             st = c.split("/")[0]
-            ls = "-"
-            if "POA_2" in c or "RPOA_2" in c: ls = ":"
+            ls = "--" if "_2" in c else "-"
             label_name = c.split("/")[1] if mode in ("POA", "RPOA") else st
             ax_irr_1.plot(x1, df1[c], label=f"{st} {label_name}", 
                           color=station_colors.get(st, "black"), linestyle=ls)
@@ -250,18 +277,20 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
     ax_irr_1.axvline(noon1_naive, color="red", ls="--")
     ax_irr_1.set_title(f"{mode} • {day1} • Noon: {noon1_str}", fontsize=12)
     ax_irr_1.set_ylabel(f"{mode} [W/m²]")
+    
+    if mode in Y_AXIS_LIMITS:
+        ax_irr_1.set_ylim(Y_AXIS_LIMITS[mode])
+        
     add_stats_box(ax_irr_1, noon_row1, cols1, mode, " W/m²")
-
-    if mode == "RPOA":
-        stations1 = sorted(list(set([c.split("/")[0] for c in cols1])))
-        add_albedo_box(ax_irr_1, noon_row1, stations1)
 
     for c in tilts1:
         if c in df1.columns:
             st = c.split("/")[0]
-            label_name = "Tilt"
+            ls = "--" if "_2" in c else "-"
+            label_name = "Tilt_2" if "_2" in c else ("Tilt_1" if "_1" in c else "Tilt")
             ax_tilt_1.plot(x1, df1[c], label=f"{st} {label_name}",
-                           color=station_colors.get(st, "black"))
+                           color=station_colors.get(st, "black"), linestyle=ls)
+                           
     ax_tilt_1.axvline(noon1_naive, color="red", ls="--")
     ax_tilt_1.set_ylabel("Tilt [°]")
     add_stats_box(ax_tilt_1, noon_row1, tilts1, "Tilt", "°")
@@ -271,25 +300,27 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
     for c in cols2:
         if c in df2.columns:
             st = c.split("/")[0]
-            ls = "-"
-            if "POA_2" in c or "RPOA_2" in c: ls = ":"
+            ls = "--" if "_2" in c else "-"
             label_name = c.split("/")[1] if mode in ("POA", "RPOA") else st
             ax_irr_2.plot(x2, df2[c], label=f"{st} {label_name}",
                           color=station_colors.get(st, "black"), linestyle=ls)
 
     ax_irr_2.axvline(noon2_naive, color="red", ls="--")
     ax_irr_2.set_title(f"{mode} • {day2} • Noon: {noon2_str}", fontsize=12)
+    
+    if mode in Y_AXIS_LIMITS:
+        ax_irr_2.set_ylim(Y_AXIS_LIMITS[mode])
+        
     add_stats_box(ax_irr_2, noon_row2, cols2, mode, " W/m²")
-
-    if mode == "RPOA":
-        stations2 = sorted(list(set([c.split("/")[0] for c in cols2])))
-        add_albedo_box(ax_irr_2, noon_row2, stations2)
 
     for c in tilts2:
         if c in df2.columns:
             st = c.split("/")[0]
+            ls = "--" if "_2" in c else "-"
+            label_name = "Tilt_2" if "_2" in c else ("Tilt_1" if "_1" in c else "Tilt")
             ax_tilt_2.plot(x2, df2[c], label=f"{st} {label_name}",
-                           color=station_colors.get(st, "black"))
+                           color=station_colors.get(st, "black"), linestyle=ls)
+                           
     ax_tilt_2.axvline(noon2_naive, color="red", ls="--")
     add_stats_box(ax_tilt_2, noon_row2, tilts2, "Tilt", "°")
 
@@ -338,6 +369,8 @@ def plot_median_ghi_poa_overlay(df, day, noon, start_time, end_time):
     ax.set_title(f"Median GHI & POA Overlay • {day}", fontsize=14)
     ax.set_ylabel("Irradiance [W/m²]", fontsize=12)
     ax.set_xlabel("Time (HH:MM)", fontsize=12)
+    
+    ax.set_ylim(0, Y_AXIS_LIMITS["POA"][1])
     
     start_ts = pd.to_datetime(f"{day} {start_time}")
     end_ts = pd.to_datetime(f"{day} {end_time}")
@@ -394,6 +427,20 @@ def write_median_timeseries_sheet(wb, sheet_name, df, noon):
     for col in ws.columns:
         ws.column_dimensions[col[0].column_letter].width = 20
 
+def create_single_excel_report(output_path, records, day, df_median, noon):
+    try:
+        from openpyxl import Workbook
+        wb = Workbook()
+        write_excel_sheet(wb, f"Peaks_{day}", day, records)
+        write_median_timeseries_sheet(wb, f"Median_Timeseries_{day}", df_median, noon)
+        if "Sheet" in wb.sheetnames: del wb["Sheet"]
+        wb.save(output_path)
+        print(f"Exported Single Day Excel Report to: {output_path.name}")
+    except ImportError:
+        print("openpyxl not installed. Skipping Excel export.")
+    except Exception as e:
+        print(f"Failed to export Excel: {e}")
+
 def create_full_excel_report(output_path, records1, day1, records2, day2, df_median, noon2):
     try:
         from openpyxl import Workbook
@@ -425,13 +472,12 @@ def main():
         try:
             df = prep_dataframe(pd.read_excel(f))
             poa_cols = [c for c in df.columns if "/POA_" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE]
-            ghi_cols = [c for c in df.columns if "/GHI" in c and "TILT" not in c] 
+            ghi_cols = [c for c in df.columns if "/GHI" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE] 
             poa_tilt = [c for c in df.columns if "/POA_" in c and "TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
-            ghi_tilt = [c for c in df.columns if "/GHI_TILT" in c]
+            ghi_tilt = [c for c in df.columns if "/GHI_TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
             
-            # Dynamic inclusion of RPOA tracking parameters 
-            rpoa_cols = [c for c in df.columns if "/RPOA_" in c and "TILT" not in c]
-            rpoa_tilt = [c for c in df.columns if "/RPOA_" in c and "TILT" in c]
+            rpoa_cols = [c for c in df.columns if "/RPOA_" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE]
+            rpoa_tilt = [c for c in df.columns if "/RPOA_" in c and "TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
             
             loaded.append({
                 "file": f, "df": df,
@@ -442,103 +488,6 @@ def main():
         except Exception as e:
             print(f"Skip {f.name}: {e}")
 
-    day1, day2 = parse_date(CompareDates[0]), parse_date(CompareDates[1])
-    src1 = find_best_source_for_day(loaded, day1)
-    src2 = find_best_source_for_day(loaded, day2)
-
-    if not src1 or not src2:
-        print("Missing data for comparison dates."); sys.exit()
-
-    noon1 = get_precise_solar_noon(day1)
-    noon2 = get_precise_solar_noon(day2)
-    noon1_naive = noon1.replace(tzinfo=None)
-    noon2_naive = noon2.replace(tzinfo=None)
-    
-    df1, df2 = src1["df_filtered"], src2["df_filtered"]
-    row1 = df1.iloc[(df1["t_stamp_dt"] - noon1_naive).abs().argsort()[:1]]
-    row2 = df2.iloc[(df2["t_stamp_dt"] - noon2_naive).abs().argsort()[:1]]
-
-    print("\nGenerating Plots...")
-    
-    # Global GHI Comparison
-    plot_compare_2x2(
-        df1, df2, src1["ghi_cols"], src1["ghi_tilt"], src2["ghi_cols"], src2["ghi_tilt"],
-        day1, day2, noon1, noon2, row1, row2,
-        title_prefix="GHI & Tilt Comparison", filename_suffix="Combined", mode="GHI"
-    )
-    
-    # Global POA Comparison
-    plot_compare_2x2(
-        df1, df2, src1["poa_cols"], src1["poa_tilt"], src2["poa_cols"], src2["poa_tilt"],
-        day1, day2, noon1, noon2, row1, row2,
-        title_prefix="POA & Tilt Comparison", filename_suffix="Combined", mode="POA"
-    )
-    
-    # Global RPOA Comparison
-    if src1["rpoa_cols"] and src2["rpoa_cols"]:
-        plot_compare_2x2(
-            df1, df2, src1["rpoa_cols"], src1["rpoa_tilt"], src2["rpoa_cols"], src2["rpoa_tilt"],
-            day1, day2, noon1, noon2, row1, row2,
-            title_prefix="RPOA & Tilt Comparison", filename_suffix="Combined", mode="RPOA"
-        )
-    
-    # Station Subfolder Localized Comparisons
-    stations = sorted(list(set([c.split("/")[0] for c in src1["poa_cols"]])))
-    
-    for st in stations:
-        st_dir = output_folder / st
-        st_dir.mkdir(exist_ok=True, parents=True)
-        
-        # 1. Localized POA Comparison
-        p1 = [c for c in src1["poa_cols"] if c.startswith(st)]
-        t1 = [c for c in src1["poa_tilt"] if c.startswith(st)]
-        p2 = [c for c in src2["poa_cols"] if c.startswith(st)]
-        t2 = [c for c in src2["poa_tilt"] if c.startswith(st)]
-        
-        if p1 and p2:
-            fname_poa = f"POA_COMPARE_{day1}_VS_{day2}_{st}.png"
-            source_path_poa = output_folder / fname_poa
-            target_path_poa = st_dir / fname_poa
-            
-            plot_compare_2x2(
-                df1, df2, p1, t1, p2, t2,
-                day1, day2, noon1, noon2, row1, row2,
-                title_prefix=f"POA & Tilt Comparison ({st})", filename_suffix=st, mode="POA"
-            )
-            # Route to Subfolder
-            if target_path_poa.exists(): target_path_poa.unlink()
-            if source_path_poa.exists(): source_path_poa.rename(target_path_poa)
-            print(f"Moved {fname_poa} to {st_dir}")
-
-        # 2. Localized RPOA Comparison
-        r1 = [c for c in src1["rpoa_cols"] if c.startswith(st)]
-        rt1 = [c for c in src1["rpoa_tilt"] if c.startswith(st)]
-        r2 = [c for c in src2["rpoa_cols"] if c.startswith(st)]
-        rt2 = [c for c in src2["rpoa_tilt"] if c.startswith(st)]
-        
-        if r1 and r2:
-            fname_rpoa = f"RPOA_COMPARE_{day1}_VS_{day2}_{st}.png"
-            source_path_rpoa = output_folder / fname_rpoa
-            target_path_rpoa = st_dir / fname_rpoa
-            
-            plot_compare_2x2(
-                df1, df2, r1, rt1, r2, rt2,
-                day1, day2, noon1, noon2, row1, row2,
-                title_prefix=f"RPOA & Tilt Comparison ({st})", filename_suffix=st, mode="RPOA"
-            )
-            # Route to Subfolder
-            if target_path_rpoa.exists(): target_path_rpoa.unlink()
-            if source_path_rpoa.exists(): source_path_rpoa.rename(target_path_rpoa)
-            print(f"Moved {fname_rpoa} to {st_dir}")
-
-    print("\nCalculating Medians & Plotting Overlay...")
-    df1_medians = calculate_medians(df1, src1["ghi_cols"], src1["poa_cols"])
-    df2_medians = calculate_medians(df2, src2["ghi_cols"], src2["poa_cols"])
-    
-    plot_median_ghi_poa_overlay(df1_medians, day1, noon1, start_time_limit, end_time_limit)
-    plot_median_ghi_poa_overlay(df2_medians, day2, noon2, start_time_limit, end_time_limit)
-
-    print("\nExporting Excel...")
     def get_records(row, cols, m_type):
         recs = []
         for c in cols:
@@ -553,27 +502,142 @@ def main():
                 })
         return recs
 
-    def export_analysis(t1, t2, filename_suffix):
-        if not t1 or not t2: return
-        r1 = df1.iloc[(df1["t_stamp_dt"] - t1).abs().argsort()[:1]]
-        r2 = df2.iloc[(df2["t_stamp_dt"] - t2).abs().argsort()[:1]]
+    # --- SINGLE DAY RUN LOGIC ---
+    if SINGLE_DAY_MODE:
+        day = parse_date(TARGET_DATE)
+        src = find_best_source_for_day(loaded, day)
+        if not src:
+            print(f"Missing data for target date: {TARGET_DATE}"); sys.exit()
+
+        noon = get_precise_solar_noon(day)
+        noon_naive = noon.replace(tzinfo=None)
+        df = src["df_filtered"]
+        row = df.iloc[(df["t_stamp_dt"] - noon_naive).abs().argsort()[:1]]
+
+        print(f"\nGenerating Single Day Plots for {TARGET_DATE}...")
         
-        recs1 = get_records(r1, src1["poa_cols"], "POA") + get_records(r1, src1["ghi_cols"], "GHI")
-        recs2 = get_records(r2, src2["poa_cols"], "POA") + get_records(r2, src2["ghi_cols"], "GHI")
-            
-        fname = f"Solar_Noon_Analysis_{filename_suffix}.xlsx" if filename_suffix else "Solar_Noon_Analysis.xlsx"
-        create_full_excel_report(output_folder / fname, recs1, day1, recs2, day2, df2_medians, noon2)
+        if src["ghi_cols"]:
+            plot_single_day(df, src["ghi_cols"], src["ghi_tilt"], day, noon, row, "GHI & Tilt", "Combined", "GHI")
+        if src["poa_cols"]:
+            plot_single_day(df, src["poa_cols"], src["poa_tilt"], day, noon, row, "POA & Tilt", "Combined", "POA")
+        if src["rpoa_cols"]:
+            plot_single_day(df, src["rpoa_cols"], src["rpoa_tilt"], day, noon, row, "RPOA & Tilt", "Combined", "RPOA")
 
-    export_analysis(noon1_naive, noon2_naive, "Calculated" if EXPORT_ESTIMATED_NOONS else "")
-
-    if EXPORT_ESTIMATED_NOONS:
-        t1_ghi = df1_medians.loc[df1_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df1_medians.columns and not df1_medians["Median_GHI"].isna().all() else None
-        t2_ghi = df2_medians.loc[df2_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df2_medians.columns and not df2_medians["Median_GHI"].isna().all() else None
-        export_analysis(t1_ghi, t2_ghi, "Est_GHI")
+        stations = sorted(list(set([c.split("/")[0] for c in src["poa_cols"]])))
+        for st in stations:
+            st_dir = output_folder / st
+            st_dir.mkdir(exist_ok=True, parents=True)
             
-        t1_poa = df1_medians.loc[df1_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df1_medians.columns and not df1_medians["Median_POA"].isna().all() else None
-        t2_poa = df2_medians.loc[df2_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df2_medians.columns and not df2_medians["Median_POA"].isna().all() else None
-        export_analysis(t1_poa, t2_poa, "Est_POA")
+            p = [c for c in src["poa_cols"] if c.startswith(st)]
+            t = [c for c in src["poa_tilt"] if c.startswith(st)]
+            if p:
+                fname = f"POA_{day}_{st}.png"
+                plot_single_day(df, p, t, day, noon, row, f"POA & Tilt ({st})", st, "POA")
+                if (output_folder / fname).exists():
+                    shutil.move(str(output_folder / fname), str(st_dir / fname))
+
+            r = [c for c in src["rpoa_cols"] if c.startswith(st)]
+            rt = [c for c in src["rpoa_tilt"] if c.startswith(st)]
+            if r:
+                fname = f"RPOA_{day}_{st}.png"
+                plot_single_day(df, r, rt, day, noon, row, f"RPOA & Tilt ({st})", st, "RPOA")
+                if (output_folder / fname).exists():
+                    shutil.move(str(output_folder / fname), str(st_dir / fname))
+
+        print("\nCalculating Medians & Plotting Overlay...")
+        df_medians = calculate_medians(df, src["ghi_cols"], src["poa_cols"])
+        plot_median_ghi_poa_overlay(df_medians, day, noon, start_time_limit, end_time_limit)
+
+        print("\nExporting Excel...")
+        def export_single_analysis(t_target, filename_suffix):
+            if not t_target: return
+            r_tgt = df.iloc[(df["t_stamp_dt"] - t_target).abs().argsort()[:1]]
+            recs = get_records(r_tgt, src["poa_cols"], "POA") + get_records(r_tgt, src["ghi_cols"], "GHI")
+            fname = f"Solar_Noon_Analysis_{filename_suffix}.xlsx" if filename_suffix else "Solar_Noon_Analysis.xlsx"
+            create_single_excel_report(output_folder / fname, recs, day, df_medians, noon)
+
+        export_single_analysis(noon_naive, "Calculated" if EXPORT_ESTIMATED_NOONS else "")
+
+        if EXPORT_ESTIMATED_NOONS:
+            t_ghi = df_medians.loc[df_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df_medians.columns and not df_medians["Median_GHI"].isna().all() else None
+            export_single_analysis(t_ghi, "Est_GHI")
+            t_poa = df_medians.loc[df_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df_medians.columns and not df_medians["Median_POA"].isna().all() else None
+            export_single_analysis(t_poa, "Est_POA")
+
+    # --- TWO DAY COMPARISON LOGIC ---
+    else:
+        day1, day2 = parse_date(COMPARE_DATES[0]), parse_date(COMPARE_DATES[1])
+        src1 = find_best_source_for_day(loaded, day1)
+        src2 = find_best_source_for_day(loaded, day2)
+
+        if not src1 or not src2:
+            print("Missing data for comparison dates."); sys.exit()
+
+        noon1, noon2 = get_precise_solar_noon(day1), get_precise_solar_noon(day2)
+        noon1_naive, noon2_naive = noon1.replace(tzinfo=None), noon2.replace(tzinfo=None)
+        
+        df1, df2 = src1["df_filtered"], src2["df_filtered"]
+        row1 = df1.iloc[(df1["t_stamp_dt"] - noon1_naive).abs().argsort()[:1]]
+        row2 = df2.iloc[(df2["t_stamp_dt"] - noon2_naive).abs().argsort()[:1]]
+
+        print("\nGenerating Plots...")
+        
+        if src1["ghi_cols"] and src2["ghi_cols"]:
+            plot_compare_2x2(df1, df2, src1["ghi_cols"], src1["ghi_tilt"], src2["ghi_cols"], src2["ghi_tilt"], day1, day2, noon1, noon2, row1, row2, "GHI & Tilt Comparison", "Combined", "GHI")
+        
+        if src1["poa_cols"] and src2["poa_cols"]:
+            plot_compare_2x2(df1, df2, src1["poa_cols"], src1["poa_tilt"], src2["poa_cols"], src2["poa_tilt"], day1, day2, noon1, noon2, row1, row2, "POA & Tilt Comparison", "Combined", "POA")
+        
+        if src1["rpoa_cols"] and src2["rpoa_cols"]:
+            plot_compare_2x2(df1, df2, src1["rpoa_cols"], src1["rpoa_tilt"], src2["rpoa_cols"], src2["rpoa_tilt"], day1, day2, noon1, noon2, row1, row2, "RPOA & Tilt Comparison", "Combined", "RPOA")
+        
+        stations = sorted(list(set([c.split("/")[0] for c in src1["poa_cols"]])))
+        
+        for st in stations:
+            st_dir = output_folder / st
+            st_dir.mkdir(exist_ok=True, parents=True)
+            
+            p1, t1 = [c for c in src1["poa_cols"] if c.startswith(st)], [c for c in src1["poa_tilt"] if c.startswith(st)]
+            p2, t2 = [c for c in src2["poa_cols"] if c.startswith(st)], [c for c in src2["poa_tilt"] if c.startswith(st)]
+            
+            if p1 and p2:
+                fname_poa = f"POA_COMPARE_{day1}_VS_{day2}_{st}.png"
+                plot_compare_2x2(df1, df2, p1, t1, p2, t2, day1, day2, noon1, noon2, row1, row2, f"POA & Tilt Comparison ({st})", st, "POA")
+                if (output_folder / fname_poa).exists(): shutil.move(str(output_folder / fname_poa), str(st_dir / fname_poa))
+
+            r1, rt1 = [c for c in src1["rpoa_cols"] if c.startswith(st)], [c for c in src1["rpoa_tilt"] if c.startswith(st)]
+            r2, rt2 = [c for c in src2["rpoa_cols"] if c.startswith(st)], [c for c in src2["rpoa_tilt"] if c.startswith(st)]
+            
+            if r1 and r2:
+                fname_rpoa = f"RPOA_COMPARE_{day1}_VS_{day2}_{st}.png"
+                plot_compare_2x2(df1, df2, r1, rt1, r2, rt2, day1, day2, noon1, noon2, row1, row2, f"RPOA & Tilt Comparison ({st})", st, "RPOA")
+                if (output_folder / fname_rpoa).exists(): shutil.move(str(output_folder / fname_rpoa), str(st_dir / fname_rpoa))
+
+        print("\nCalculating Medians & Plotting Overlay...")
+        df1_medians, df2_medians = calculate_medians(df1, src1["ghi_cols"], src1["poa_cols"]), calculate_medians(df2, src2["ghi_cols"], src2["poa_cols"])
+        
+        plot_median_ghi_poa_overlay(df1_medians, day1, noon1, start_time_limit, end_time_limit)
+        plot_median_ghi_poa_overlay(df2_medians, day2, noon2, start_time_limit, end_time_limit)
+
+        print("\nExporting Excel...")
+        def export_analysis(t1, t2, filename_suffix):
+            if not t1 or not t2: return
+            r1, r2 = df1.iloc[(df1["t_stamp_dt"] - t1).abs().argsort()[:1]], df2.iloc[(df2["t_stamp_dt"] - t2).abs().argsort()[:1]]
+            recs1 = get_records(r1, src1["poa_cols"], "POA") + get_records(r1, src1["ghi_cols"], "GHI")
+            recs2 = get_records(r2, src2["poa_cols"], "POA") + get_records(r2, src2["ghi_cols"], "GHI")
+            fname = f"Solar_Noon_Analysis_{filename_suffix}.xlsx" if filename_suffix else "Solar_Noon_Analysis.xlsx"
+            create_full_excel_report(output_folder / fname, recs1, day1, recs2, day2, df2_medians, noon2)
+
+        export_analysis(noon1_naive, noon2_naive, "Calculated" if EXPORT_ESTIMATED_NOONS else "")
+
+        if EXPORT_ESTIMATED_NOONS:
+            t1_ghi = df1_medians.loc[df1_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df1_medians.columns and not df1_medians["Median_GHI"].isna().all() else None
+            t2_ghi = df2_medians.loc[df2_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df2_medians.columns and not df2_medians["Median_GHI"].isna().all() else None
+            export_analysis(t1_ghi, t2_ghi, "Est_GHI")
+                
+            t1_poa = df1_medians.loc[df1_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df1_medians.columns and not df1_medians["Median_POA"].isna().all() else None
+            t2_poa = df2_medians.loc[df2_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df2_medians.columns and not df2_medians["Median_POA"].isna().all() else None
+            export_analysis(t1_poa, t2_poa, "Est_POA")
 
     print("\nProcessing Complete.")
 

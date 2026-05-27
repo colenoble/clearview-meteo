@@ -5,6 +5,7 @@ from pathlib import Path
 import sys
 import shutil
 from datetime import datetime
+import pytz
 
 # pvlib required for precise solar noon
 try:
@@ -22,8 +23,11 @@ input_folder = Path("inputs/GHI&GHI_tilt")
 # Run Mode Options
 SINGLE_DAY_MODE = True
 
+# Target Time Override (Set to "HH:MM:SS" e.g., "13:30:00" to override solar noon, or None for default)
+CUSTOM_COMPARE_TIME = "14:20:00" 
+
 # Dates
-TARGET_DATE = "2026-05-08"                           # Used if SINGLE_DAY_MODE is True
+TARGET_DATE = "2026-05-09"                           # Used if SINGLE_DAY_MODE is True
 COMPARE_DATES = ("2026-05-02", "2026-05-03")         # Used if SINGLE_DAY_MODE is False
 
 # --- DYNAMIC OUTPUT FOLDER CREATION ---
@@ -62,7 +66,7 @@ SENSORS_TO_INCLUDE = [
    "MET16/POA_1", "MET16/POA_2",
     "MET22/POA_1", "MET22/POA_2",
    "MET37/POA_1", "MET37/POA_2",
-    
+   
     # RPOA Sensors
    "MET02/RPOA_1", "MET02/RPOA_2",
    "MET16/RPOA_1", "MET16/RPOA_2",
@@ -99,11 +103,11 @@ def prep_dataframe(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df["t_stamp_dt"] = pd.to_datetime(df["t_stamp"], errors="coerce")
     df = df.sort_values("t_stamp_dt").reset_index(drop=True)
-    
+   
     if AVERAGING_WINDOW_MINS > 1:
         num_cols = df.select_dtypes(include='number').columns
         df[num_cols] = df[num_cols].rolling(window=AVERAGING_WINDOW_MINS, center=True, min_periods=1).mean()
-        
+       
     df["date"] = df["t_stamp_dt"].dt.date
     return df
 
@@ -116,11 +120,18 @@ def filter_day_time(df: pd.DataFrame, day):
 def get_precise_solar_noon(date_obj):
     if not pvlib:
         return datetime.combine(date_obj, pd.to_datetime("12:00:00").time())
-    
+   
     times = pd.date_range(start=f"{date_obj} 11:00:00", end=f"{date_obj} 15:00:00", freq="1min", tz=TZ)
     solpos = pvlib.solarposition.get_solarposition(times, LAT, LON)
     noon_idx = solpos['elevation'].idxmax()
     return noon_idx.to_pydatetime()
+
+def get_target_datetime(date_obj):
+    if CUSTOM_COMPARE_TIME:
+        dt_str = f"{date_obj} {CUSTOM_COMPARE_TIME}"
+        dt = pd.to_datetime(dt_str)
+        return pytz.timezone(TZ).localize(dt).to_pydatetime()
+    return get_precise_solar_noon(date_obj)
 
 def format_time_axis(ax):
     ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=MAJOR_TICK_MINUTES))
@@ -129,7 +140,7 @@ def format_time_axis(ax):
     ax.grid(True, which="major", linestyle="--", alpha=0.35)
     ax.grid(True, which="minor", linestyle="--", alpha=0.15)
 
-def add_stats_box(ax, target_row, cols, label, unit):
+def add_stats_box(ax, target_row, cols, label, unit, time_label="Noon"):
     if target_row is None or target_row.empty or not cols:
         return
 
@@ -142,7 +153,7 @@ def add_stats_box(ax, target_row, cols, label, unit):
     delta = v_max - v_min
 
     stats_text = (
-        f"{label} @ Noon\n"
+        f"{label} @ {time_label}\n"
         f"Median: {vals.median():.2f}{unit}\n"
         f"Average: {vals.mean():.2f}{unit}\n"
         f"Range: {v_min:.1f} - {v_max:.1f}{unit}\n"
@@ -171,7 +182,7 @@ def set_top_right_legend(ax, title="Sensors"):
     handles, labels = ax.get_legend_handles_labels()
     if handles:
         ax.legend(
-            loc="upper left", bbox_to_anchor=(1.02, 1), 
+            loc="upper left", bbox_to_anchor=(1.02, 1),
             title=title, borderaxespad=0., fontsize=9
         )
 
@@ -191,37 +202,37 @@ def calculate_medians(df, ghi_cols, poa_cols):
     df_med = df[["t_stamp_dt", "t_stamp"]].copy()
     avail_ghi = [c for c in ghi_cols if c in df.columns]
     avail_poa = [c for c in poa_cols if c in df.columns]
-    
+   
     if avail_ghi: df_med["Median_GHI"] = df[avail_ghi].median(axis=1)
     if avail_poa: df_med["Median_POA"] = df[avail_poa].median(axis=1)
-        
+       
     return df_med
 
-def plot_single_day(df, cols, tilts, day, noon, noon_row, title_prefix, filename_suffix, mode="POA"):
+def plot_single_day(df, cols, tilts, day, target_time, target_row, title_prefix, filename_suffix, mode="POA", time_label="Noon"):
     fig, axes = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
     ax_irr, ax_tilt = axes[0], axes[1]
-    
-    noon_naive = noon.replace(tzinfo=None)
-    noon_str = pd.to_datetime(noon).round("1min").strftime("%H:%M")
+   
+    target_naive = target_time.replace(tzinfo=None)
+    target_str = pd.to_datetime(target_time).round("1min").strftime("%H:%M")
     x = df["t_stamp_dt"]
-    
+   
     # Irradiance Plot
     for c in cols:
         if c in df.columns:
             st = c.split("/")[0]
             ls = "--" if "_2" in c else "-"
             label_name = c.split("/")[1] if mode in ("POA", "RPOA") else st
-            ax_irr.plot(x, df[c], label=f"{st} {label_name}", 
+            ax_irr.plot(x, df[c], label=f"{st} {label_name}",
                         color=station_colors.get(st, "black"), linestyle=ls)
-            
-    ax_irr.axvline(noon_naive, color="red", ls="--")
-    ax_irr.set_title(f"{mode} • {day} • Noon: {noon_str}", fontsize=12)
+           
+    ax_irr.axvline(target_naive, color="red", ls="--")
+    ax_irr.set_title(f"{mode} • {day} • {time_label}: {target_str}", fontsize=12)
     ax_irr.set_ylabel(f"{mode} [W/m²]")
-    
+   
     if mode in Y_AXIS_LIMITS:
         ax_irr.set_ylim(Y_AXIS_LIMITS[mode])
-        
-    add_stats_box(ax_irr, noon_row, cols, mode, " W/m²")
+       
+    add_stats_box(ax_irr, target_row, cols, mode, " W/m²", time_label)
 
     # Tilt Plot
     for c in tilts:
@@ -232,38 +243,38 @@ def plot_single_day(df, cols, tilts, day, noon, noon_row, title_prefix, filename
             ax_tilt.plot(x, df[c], label=f"{st} {label_name}",
                          color=station_colors.get(st, "black"), linestyle=ls)
                          
-    ax_tilt.axvline(noon_naive, color="red", ls="--")
+    ax_tilt.axvline(target_naive, color="red", ls="--")
     ax_tilt.set_ylabel("Tilt [°]")
-    add_stats_box(ax_tilt, noon_row, tilts, "Tilt", "°")
+    add_stats_box(ax_tilt, target_row, tilts, "Tilt", "°", time_label)
 
     # Formatting
     for ax in axes:
         format_time_axis(ax)
         set_top_right_legend(ax)
-        
+       
     ax_tilt.set_xlabel("Time (HH:MM)")
     plt.setp(ax_tilt.get_xticklabels(), rotation=45, ha="right")
 
     fig.suptitle(title_prefix, fontsize=13, y=0.98)
     plt.tight_layout(rect=[0, 0, 1, 0.95])
-    
+   
     save_path = output_folder / f"{mode}_{day}_{filename_suffix}.png"
     plt.savefig(save_path, dpi=150)
     plt.close(fig)
     print(f"Saved: {save_path.name}")
 
 def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
-                     day1, day2, noon1, noon2, noon_row1, noon_row2,
-                     title_prefix, filename_suffix, mode="POA"):
+                     day1, day2, target1, target2, row1, row2,
+                     title_prefix, filename_suffix, mode="POA", time_label="Noon"):
     fig, axes = plt.subplots(2, 2, figsize=(20, 10), sharey="row", sharex="col")
     ax_irr_1, ax_irr_2 = axes[0, 0], axes[0, 1]
     ax_tilt_1, ax_tilt_2 = axes[1, 0], axes[1, 1]
-    
-    noon1_naive = noon1.replace(tzinfo=None)
-    noon2_naive = noon2.replace(tzinfo=None)
-    noon1_str = pd.to_datetime(noon1).round("1min").strftime("%H:%M")
-    noon2_str = pd.to_datetime(noon2).round("1min").strftime("%H:%M")
-    
+   
+    t1_naive = target1.replace(tzinfo=None)
+    t2_naive = target2.replace(tzinfo=None)
+    t1_str = pd.to_datetime(target1).round("1min").strftime("%H:%M")
+    t2_str = pd.to_datetime(target2).round("1min").strftime("%H:%M")
+   
     # --- Day 1 (Left) ---
     x1 = df1["t_stamp_dt"]
     for c in cols1:
@@ -271,17 +282,17 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
             st = c.split("/")[0]
             ls = "--" if "_2" in c else "-"
             label_name = c.split("/")[1] if mode in ("POA", "RPOA") else st
-            ax_irr_1.plot(x1, df1[c], label=f"{st} {label_name}", 
+            ax_irr_1.plot(x1, df1[c], label=f"{st} {label_name}",
                           color=station_colors.get(st, "black"), linestyle=ls)
-            
-    ax_irr_1.axvline(noon1_naive, color="red", ls="--")
-    ax_irr_1.set_title(f"{mode} • {day1} • Noon: {noon1_str}", fontsize=12)
+           
+    ax_irr_1.axvline(t1_naive, color="red", ls="--")
+    ax_irr_1.set_title(f"{mode} • {day1} • {time_label}: {t1_str}", fontsize=12)
     ax_irr_1.set_ylabel(f"{mode} [W/m²]")
-    
+   
     if mode in Y_AXIS_LIMITS:
         ax_irr_1.set_ylim(Y_AXIS_LIMITS[mode])
-        
-    add_stats_box(ax_irr_1, noon_row1, cols1, mode, " W/m²")
+       
+    add_stats_box(ax_irr_1, row1, cols1, mode, " W/m²", time_label)
 
     for c in tilts1:
         if c in df1.columns:
@@ -291,9 +302,9 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
             ax_tilt_1.plot(x1, df1[c], label=f"{st} {label_name}",
                            color=station_colors.get(st, "black"), linestyle=ls)
                            
-    ax_tilt_1.axvline(noon1_naive, color="red", ls="--")
+    ax_tilt_1.axvline(t1_naive, color="red", ls="--")
     ax_tilt_1.set_ylabel("Tilt [°]")
-    add_stats_box(ax_tilt_1, noon_row1, tilts1, "Tilt", "°")
+    add_stats_box(ax_tilt_1, row1, tilts1, "Tilt", "°", time_label)
 
     # --- Day 2 (Right) ---
     x2 = df2["t_stamp_dt"]
@@ -305,13 +316,13 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
             ax_irr_2.plot(x2, df2[c], label=f"{st} {label_name}",
                           color=station_colors.get(st, "black"), linestyle=ls)
 
-    ax_irr_2.axvline(noon2_naive, color="red", ls="--")
-    ax_irr_2.set_title(f"{mode} • {day2} • Noon: {noon2_str}", fontsize=12)
-    
+    ax_irr_2.axvline(t2_naive, color="red", ls="--")
+    ax_irr_2.set_title(f"{mode} • {day2} • {time_label}: {t2_str}", fontsize=12)
+   
     if mode in Y_AXIS_LIMITS:
         ax_irr_2.set_ylim(Y_AXIS_LIMITS[mode])
-        
-    add_stats_box(ax_irr_2, noon_row2, cols2, mode, " W/m²")
+       
+    add_stats_box(ax_irr_2, row2, cols2, mode, " W/m²", time_label)
 
     for c in tilts2:
         if c in df2.columns:
@@ -321,8 +332,8 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
             ax_tilt_2.plot(x2, df2[c], label=f"{st} {label_name}",
                            color=station_colors.get(st, "black"), linestyle=ls)
                            
-    ax_tilt_2.axvline(noon2_naive, color="red", ls="--")
-    add_stats_box(ax_tilt_2, noon_row2, tilts2, "Tilt", "°")
+    ax_tilt_2.axvline(t2_naive, color="red", ls="--")
+    add_stats_box(ax_tilt_2, row2, tilts2, "Tilt", "°", time_label)
 
     # Formatting
     for ax in axes.flatten():
@@ -336,47 +347,47 @@ def plot_compare_2x2(df1, df2, cols1, tilts1, cols2, tilts2,
 
     fig.suptitle(title_prefix, fontsize=13, y=0.98)
     plt.tight_layout(rect=[0, 0, 1, 0.92])
-    
+   
     save_path = output_folder / f"{mode}_COMPARE_{day1}_VS_{day2}_{filename_suffix}.png"
     plt.savefig(save_path, dpi=150)
     plt.close(fig)
     print(f"Saved: {save_path.name}")
 
-def plot_median_ghi_poa_overlay(df, day, noon, start_time, end_time):
+def plot_median_ghi_poa_overlay(df, day, target_time, start_time, end_time, time_label="Noon"):
     fig, ax = plt.subplots(figsize=(14, 6))
     x = df["t_stamp_dt"]
-    noon_naive = noon.replace(tzinfo=None)
-    
+    target_naive = target_time.replace(tzinfo=None)
+   
     if "Median_GHI" in df.columns:
         ax.plot(x, df["Median_GHI"], label="Median GHI", color="tab:blue", linestyle="-", linewidth=2)
     if "Median_POA" in df.columns:
         ax.plot(x, df["Median_POA"], label="Median POA", color="tab:orange", linestyle="-", linewidth=2)
-        
-    noon_str = pd.to_datetime(noon).round("1min").strftime("%H:%M")
-    ax.axvline(noon_naive, color="red", linestyle="--", linewidth=2, label=f"Calc Solar Noon ({noon_str})")
-    
+       
+    target_str = pd.to_datetime(target_time).round("1min").strftime("%H:%M")
+    ax.axvline(target_naive, color="red", linestyle="--", linewidth=2, label=f"{time_label} ({target_str})")
+   
     if "Median_GHI" in df.columns and not df["Median_GHI"].isna().all():
         max_ghi_idx = df["Median_GHI"].idxmax()
         max_ghi_time = df.loc[max_ghi_idx, "t_stamp_dt"]
-        ax.axvline(max_ghi_time, color="tab:blue", linestyle=":", linewidth=2, label=f"Est GHI Noon ({max_ghi_time.strftime('%H:%M')})")
+        ax.axvline(max_ghi_time, color="tab:blue", linestyle=":", linewidth=2, label=f"Est GHI Peak ({max_ghi_time.strftime('%H:%M')})")
 
     if "Median_POA" in df.columns and not df["Median_POA"].isna().all():
         max_poa_idx = df["Median_POA"].idxmax()
         max_poa_time = df.loc[max_poa_idx, "t_stamp_dt"]
-        ax.axvline(max_poa_time, color="tab:orange", linestyle=":", linewidth=2, label=f"Est POA Noon ({max_poa_time.strftime('%H:%M')})")
+        ax.axvline(max_poa_time, color="tab:orange", linestyle=":", linewidth=2, label=f"Est POA Peak ({max_poa_time.strftime('%H:%M')})")
 
     format_time_axis(ax)
     ax.set_title(f"Median GHI & POA Overlay • {day}", fontsize=14)
     ax.set_ylabel("Irradiance [W/m²]", fontsize=12)
     ax.set_xlabel("Time (HH:MM)", fontsize=12)
-    
+   
     ax.set_ylim(0, Y_AXIS_LIMITS["POA"][1])
-    
+   
     start_ts = pd.to_datetime(f"{day} {start_time}")
     end_ts = pd.to_datetime(f"{day} {end_time}")
     ax.set_xlim(start_ts, end_ts)
     ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), borderaxespad=0., fontsize=10)
-    
+   
     plt.tight_layout()
     save_path = output_folder / f"MEDIAN_GHI_POA_OVERLAY_{day}.png"
     plt.savefig(save_path, dpi=150)
@@ -388,16 +399,16 @@ def plot_median_ghi_poa_overlay(df, day, noon, start_time, end_time):
 # 4) EXCEL EXPORT FUNCTIONS
 # ------------------------------------------------------------
 
-def write_excel_sheet(wb, sheet_name, date_val, records):
+def write_excel_sheet(wb, sheet_name, date_val, records, time_label="Solar Noon"):
     if sheet_name in wb.sheetnames: del wb[sheet_name]
     ws = wb.create_sheet(sheet_name)
     ws.append(["Target Date:", str(date_val)])
     ws.append([])
-    ws.append(["Type", "Sensor", "Solar Noon Est (EST)", "Irradiance (W/m²)", "Tilt (°)"])
-    
+    ws.append(["Type", "Sensor", f"{time_label} Est (EST)", "Irradiance (W/m²)", "Tilt (°)"])
+   
     for r in records:
         ws.append([r["type"], r["sensor"], r["noon_est"], r["irr_val"], r["tilt_val"]])
-        
+       
     for col in ws.columns:
         max_length = 0
         column = col[0].column_letter
@@ -407,32 +418,32 @@ def write_excel_sheet(wb, sheet_name, date_val, records):
             except: pass
         ws.column_dimensions[column].width = max_length + 2
 
-def write_median_timeseries_sheet(wb, sheet_name, df, noon):
+def write_median_timeseries_sheet(wb, sheet_name, df, target_time, time_label="Solar Noon"):
     if sheet_name in wb.sheetnames: del wb[sheet_name]
     ws = wb.create_sheet(sheet_name)
-    ws.append(["Calculated Solar Noon:", pd.to_datetime(noon).round("1min").strftime("%H:%M:%S")])
+    ws.append([f"Calculated {time_label}:", pd.to_datetime(target_time).round("1min").strftime("%H:%M:%S")])
     ws.append([])
-    
+   
     headers = ["t_stamp"]
     if "Median_GHI" in df.columns: headers.append("Median_GHI")
     if "Median_POA" in df.columns: headers.append("Median_POA")
     ws.append(headers)
-    
+   
     for _, row in df.iterrows():
         out_row = [row["t_stamp"]]
         if "Median_GHI" in df.columns: out_row.append(row["Median_GHI"])
         if "Median_POA" in df.columns: out_row.append(row["Median_POA"])
         ws.append(out_row)
-        
+       
     for col in ws.columns:
         ws.column_dimensions[col[0].column_letter].width = 20
 
-def create_single_excel_report(output_path, records, day, df_median, noon):
+def create_single_excel_report(output_path, records, day, df_median, target_time, time_label="Solar Noon"):
     try:
         from openpyxl import Workbook
         wb = Workbook()
-        write_excel_sheet(wb, f"Peaks_{day}", day, records)
-        write_median_timeseries_sheet(wb, f"Median_Timeseries_{day}", df_median, noon)
+        write_excel_sheet(wb, f"Peaks_{day}", day, records, time_label)
+        write_median_timeseries_sheet(wb, f"Median_Timeseries_{day}", df_median, target_time, time_label)
         if "Sheet" in wb.sheetnames: del wb["Sheet"]
         wb.save(output_path)
         print(f"Exported Single Day Excel Report to: {output_path.name}")
@@ -441,13 +452,13 @@ def create_single_excel_report(output_path, records, day, df_median, noon):
     except Exception as e:
         print(f"Failed to export Excel: {e}")
 
-def create_full_excel_report(output_path, records1, day1, records2, day2, df_median, noon2):
+def create_full_excel_report(output_path, records1, day1, records2, day2, df_median, target_time2, time_label="Solar Noon"):
     try:
         from openpyxl import Workbook
         wb = Workbook()
-        write_excel_sheet(wb, f"Peaks_{day1}", day1, records1)
-        write_excel_sheet(wb, f"Peaks_{day2}", day2, records2)
-        write_median_timeseries_sheet(wb, f"Median_Timeseries_{day2}", df_median, noon2)
+        write_excel_sheet(wb, f"Peaks_{day1}", day1, records1, time_label)
+        write_excel_sheet(wb, f"Peaks_{day2}", day2, records2, time_label)
+        write_median_timeseries_sheet(wb, f"Median_Timeseries_{day2}", df_median, target_time2, time_label)
         if "Sheet" in wb.sheetnames: del wb["Sheet"]
         wb.save(output_path)
         print(f"Exported Excel Report to: {output_path.name}")
@@ -472,13 +483,13 @@ def main():
         try:
             df = prep_dataframe(pd.read_excel(f))
             poa_cols = [c for c in df.columns if "/POA_" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE]
-            ghi_cols = [c for c in df.columns if "/GHI" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE] 
+            ghi_cols = [c for c in df.columns if "/GHI" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE]
             poa_tilt = [c for c in df.columns if "/POA_" in c and "TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
             ghi_tilt = [c for c in df.columns if "/GHI_TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
-            
+           
             rpoa_cols = [c for c in df.columns if "/RPOA_" in c and "TILT" not in c and c in SENSORS_TO_INCLUDE]
             rpoa_tilt = [c for c in df.columns if "/RPOA_" in c and "TILT" in c and c.replace("_TILT_ANGLE","") in SENSORS_TO_INCLUDE]
-            
+           
             loaded.append({
                 "file": f, "df": df,
                 "poa_cols": poa_cols, "ghi_cols": ghi_cols,
@@ -502,6 +513,8 @@ def main():
                 })
         return recs
 
+    time_label = "Custom Time" if CUSTOM_COMPARE_TIME else "Noon"
+
     # --- SINGLE DAY RUN LOGIC ---
     if SINGLE_DAY_MODE:
         day = parse_date(TARGET_DATE)
@@ -509,30 +522,30 @@ def main():
         if not src:
             print(f"Missing data for target date: {TARGET_DATE}"); sys.exit()
 
-        noon = get_precise_solar_noon(day)
-        noon_naive = noon.replace(tzinfo=None)
+        target_dt = get_target_datetime(day)
+        target_naive = target_dt.replace(tzinfo=None)
         df = src["df_filtered"]
-        row = df.iloc[(df["t_stamp_dt"] - noon_naive).abs().argsort()[:1]]
+        row = df.iloc[(df["t_stamp_dt"] - target_naive).abs().argsort()[:1]]
 
         print(f"\nGenerating Single Day Plots for {TARGET_DATE}...")
-        
+       
         if src["ghi_cols"]:
-            plot_single_day(df, src["ghi_cols"], src["ghi_tilt"], day, noon, row, "GHI & Tilt", "Combined", "GHI")
+            plot_single_day(df, src["ghi_cols"], src["ghi_tilt"], day, target_dt, row, "GHI & Tilt", "Combined", "GHI", time_label)
         if src["poa_cols"]:
-            plot_single_day(df, src["poa_cols"], src["poa_tilt"], day, noon, row, "POA & Tilt", "Combined", "POA")
+            plot_single_day(df, src["poa_cols"], src["poa_tilt"], day, target_dt, row, "POA & Tilt", "Combined", "POA", time_label)
         if src["rpoa_cols"]:
-            plot_single_day(df, src["rpoa_cols"], src["rpoa_tilt"], day, noon, row, "RPOA & Tilt", "Combined", "RPOA")
+            plot_single_day(df, src["rpoa_cols"], src["rpoa_tilt"], day, target_dt, row, "RPOA & Tilt", "Combined", "RPOA", time_label)
 
         stations = sorted(list(set([c.split("/")[0] for c in src["poa_cols"]])))
         for st in stations:
             st_dir = output_folder / st
             st_dir.mkdir(exist_ok=True, parents=True)
-            
+           
             p = [c for c in src["poa_cols"] if c.startswith(st)]
             t = [c for c in src["poa_tilt"] if c.startswith(st)]
             if p:
                 fname = f"POA_{day}_{st}.png"
-                plot_single_day(df, p, t, day, noon, row, f"POA & Tilt ({st})", st, "POA")
+                plot_single_day(df, p, t, day, target_dt, row, f"POA & Tilt ({st})", st, "POA", time_label)
                 if (output_folder / fname).exists():
                     shutil.move(str(output_folder / fname), str(st_dir / fname))
 
@@ -540,29 +553,29 @@ def main():
             rt = [c for c in src["rpoa_tilt"] if c.startswith(st)]
             if r:
                 fname = f"RPOA_{day}_{st}.png"
-                plot_single_day(df, r, rt, day, noon, row, f"RPOA & Tilt ({st})", st, "RPOA")
+                plot_single_day(df, r, rt, day, target_dt, row, f"RPOA & Tilt ({st})", st, "RPOA", time_label)
                 if (output_folder / fname).exists():
                     shutil.move(str(output_folder / fname), str(st_dir / fname))
 
         print("\nCalculating Medians & Plotting Overlay...")
         df_medians = calculate_medians(df, src["ghi_cols"], src["poa_cols"])
-        plot_median_ghi_poa_overlay(df_medians, day, noon, start_time_limit, end_time_limit)
+        plot_median_ghi_poa_overlay(df_medians, day, target_dt, start_time_limit, end_time_limit, time_label)
 
         print("\nExporting Excel...")
-        def export_single_analysis(t_target, filename_suffix):
+        def export_single_analysis(t_target, filename_suffix, export_time_label):
             if not t_target: return
             r_tgt = df.iloc[(df["t_stamp_dt"] - t_target).abs().argsort()[:1]]
             recs = get_records(r_tgt, src["poa_cols"], "POA") + get_records(r_tgt, src["ghi_cols"], "GHI")
-            fname = f"Solar_Noon_Analysis_{filename_suffix}.xlsx" if filename_suffix else "Solar_Noon_Analysis.xlsx"
-            create_single_excel_report(output_folder / fname, recs, day, df_medians, noon)
+            fname = f"Target_Time_Analysis_{filename_suffix}.xlsx" if filename_suffix else "Target_Time_Analysis.xlsx"
+            create_single_excel_report(output_folder / fname, recs, day, df_medians, target_dt, export_time_label)
 
-        export_single_analysis(noon_naive, "Calculated" if EXPORT_ESTIMATED_NOONS else "")
+        export_single_analysis(target_naive, "Calculated" if EXPORT_ESTIMATED_NOONS else "", time_label)
 
         if EXPORT_ESTIMATED_NOONS:
             t_ghi = df_medians.loc[df_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df_medians.columns and not df_medians["Median_GHI"].isna().all() else None
-            export_single_analysis(t_ghi, "Est_GHI")
+            export_single_analysis(t_ghi, "Est_GHI_Peak", "Estimated Peak")
             t_poa = df_medians.loc[df_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df_medians.columns and not df_medians["Median_POA"].isna().all() else None
-            export_single_analysis(t_poa, "Est_POA")
+            export_single_analysis(t_poa, "Est_POA_Peak", "Estimated Peak")
 
     # --- TWO DAY COMPARISON LOGIC ---
     else:
@@ -573,71 +586,71 @@ def main():
         if not src1 or not src2:
             print("Missing data for comparison dates."); sys.exit()
 
-        noon1, noon2 = get_precise_solar_noon(day1), get_precise_solar_noon(day2)
-        noon1_naive, noon2_naive = noon1.replace(tzinfo=None), noon2.replace(tzinfo=None)
-        
+        target_dt1, target_dt2 = get_target_datetime(day1), get_target_datetime(day2)
+        target_naive1, target_naive2 = target_dt1.replace(tzinfo=None), target_dt2.replace(tzinfo=None)
+       
         df1, df2 = src1["df_filtered"], src2["df_filtered"]
-        row1 = df1.iloc[(df1["t_stamp_dt"] - noon1_naive).abs().argsort()[:1]]
-        row2 = df2.iloc[(df2["t_stamp_dt"] - noon2_naive).abs().argsort()[:1]]
+        row1 = df1.iloc[(df1["t_stamp_dt"] - target_naive1).abs().argsort()[:1]]
+        row2 = df2.iloc[(df2["t_stamp_dt"] - target_naive2).abs().argsort()[:1]]
 
         print("\nGenerating Plots...")
-        
+       
         if src1["ghi_cols"] and src2["ghi_cols"]:
-            plot_compare_2x2(df1, df2, src1["ghi_cols"], src1["ghi_tilt"], src2["ghi_cols"], src2["ghi_tilt"], day1, day2, noon1, noon2, row1, row2, "GHI & Tilt Comparison", "Combined", "GHI")
-        
+            plot_compare_2x2(df1, df2, src1["ghi_cols"], src1["ghi_tilt"], src2["ghi_cols"], src2["ghi_tilt"], day1, day2, target_dt1, target_dt2, row1, row2, "GHI & Tilt Comparison", "Combined", "GHI", time_label)
+       
         if src1["poa_cols"] and src2["poa_cols"]:
-            plot_compare_2x2(df1, df2, src1["poa_cols"], src1["poa_tilt"], src2["poa_cols"], src2["poa_tilt"], day1, day2, noon1, noon2, row1, row2, "POA & Tilt Comparison", "Combined", "POA")
-        
+            plot_compare_2x2(df1, df2, src1["poa_cols"], src1["poa_tilt"], src2["poa_cols"], src2["poa_tilt"], day1, day2, target_dt1, target_dt2, row1, row2, "POA & Tilt Comparison", "Combined", "POA", time_label)
+       
         if src1["rpoa_cols"] and src2["rpoa_cols"]:
-            plot_compare_2x2(df1, df2, src1["rpoa_cols"], src1["rpoa_tilt"], src2["rpoa_cols"], src2["rpoa_tilt"], day1, day2, noon1, noon2, row1, row2, "RPOA & Tilt Comparison", "Combined", "RPOA")
-        
+            plot_compare_2x2(df1, df2, src1["rpoa_cols"], src1["rpoa_tilt"], src2["rpoa_cols"], src2["rpoa_tilt"], day1, day2, target_dt1, target_dt2, row1, row2, "RPOA & Tilt Comparison", "Combined", "RPOA", time_label)
+       
         stations = sorted(list(set([c.split("/")[0] for c in src1["poa_cols"]])))
-        
+       
         for st in stations:
             st_dir = output_folder / st
             st_dir.mkdir(exist_ok=True, parents=True)
-            
+           
             p1, t1 = [c for c in src1["poa_cols"] if c.startswith(st)], [c for c in src1["poa_tilt"] if c.startswith(st)]
             p2, t2 = [c for c in src2["poa_cols"] if c.startswith(st)], [c for c in src2["poa_tilt"] if c.startswith(st)]
-            
+           
             if p1 and p2:
                 fname_poa = f"POA_COMPARE_{day1}_VS_{day2}_{st}.png"
-                plot_compare_2x2(df1, df2, p1, t1, p2, t2, day1, day2, noon1, noon2, row1, row2, f"POA & Tilt Comparison ({st})", st, "POA")
+                plot_compare_2x2(df1, df2, p1, t1, p2, t2, day1, day2, target_dt1, target_dt2, row1, row2, f"POA & Tilt Comparison ({st})", st, "POA", time_label)
                 if (output_folder / fname_poa).exists(): shutil.move(str(output_folder / fname_poa), str(st_dir / fname_poa))
 
             r1, rt1 = [c for c in src1["rpoa_cols"] if c.startswith(st)], [c for c in src1["rpoa_tilt"] if c.startswith(st)]
             r2, rt2 = [c for c in src2["rpoa_cols"] if c.startswith(st)], [c for c in src2["rpoa_tilt"] if c.startswith(st)]
-            
+           
             if r1 and r2:
                 fname_rpoa = f"RPOA_COMPARE_{day1}_VS_{day2}_{st}.png"
-                plot_compare_2x2(df1, df2, r1, rt1, r2, rt2, day1, day2, noon1, noon2, row1, row2, f"RPOA & Tilt Comparison ({st})", st, "RPOA")
+                plot_compare_2x2(df1, df2, r1, rt1, r2, rt2, day1, day2, target_dt1, target_dt2, row1, row2, f"RPOA & Tilt Comparison ({st})", st, "RPOA", time_label)
                 if (output_folder / fname_rpoa).exists(): shutil.move(str(output_folder / fname_rpoa), str(st_dir / fname_rpoa))
 
         print("\nCalculating Medians & Plotting Overlay...")
         df1_medians, df2_medians = calculate_medians(df1, src1["ghi_cols"], src1["poa_cols"]), calculate_medians(df2, src2["ghi_cols"], src2["poa_cols"])
-        
-        plot_median_ghi_poa_overlay(df1_medians, day1, noon1, start_time_limit, end_time_limit)
-        plot_median_ghi_poa_overlay(df2_medians, day2, noon2, start_time_limit, end_time_limit)
+       
+        plot_median_ghi_poa_overlay(df1_medians, day1, target_dt1, start_time_limit, end_time_limit, time_label)
+        plot_median_ghi_poa_overlay(df2_medians, day2, target_dt2, start_time_limit, end_time_limit, time_label)
 
         print("\nExporting Excel...")
-        def export_analysis(t1, t2, filename_suffix):
+        def export_analysis(t1, t2, filename_suffix, export_time_label):
             if not t1 or not t2: return
             r1, r2 = df1.iloc[(df1["t_stamp_dt"] - t1).abs().argsort()[:1]], df2.iloc[(df2["t_stamp_dt"] - t2).abs().argsort()[:1]]
             recs1 = get_records(r1, src1["poa_cols"], "POA") + get_records(r1, src1["ghi_cols"], "GHI")
             recs2 = get_records(r2, src2["poa_cols"], "POA") + get_records(r2, src2["ghi_cols"], "GHI")
-            fname = f"Solar_Noon_Analysis_{filename_suffix}.xlsx" if filename_suffix else "Solar_Noon_Analysis.xlsx"
-            create_full_excel_report(output_folder / fname, recs1, day1, recs2, day2, df2_medians, noon2)
+            fname = f"Target_Time_Analysis_{filename_suffix}.xlsx" if filename_suffix else "Target_Time_Analysis.xlsx"
+            create_full_excel_report(output_folder / fname, recs1, day1, recs2, day2, df2_medians, target_dt2, export_time_label)
 
-        export_analysis(noon1_naive, noon2_naive, "Calculated" if EXPORT_ESTIMATED_NOONS else "")
+        export_analysis(target_naive1, target_naive2, "Calculated" if EXPORT_ESTIMATED_NOONS else "", time_label)
 
         if EXPORT_ESTIMATED_NOONS:
             t1_ghi = df1_medians.loc[df1_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df1_medians.columns and not df1_medians["Median_GHI"].isna().all() else None
             t2_ghi = df2_medians.loc[df2_medians["Median_GHI"].idxmax(), "t_stamp_dt"] if "Median_GHI" in df2_medians.columns and not df2_medians["Median_GHI"].isna().all() else None
-            export_analysis(t1_ghi, t2_ghi, "Est_GHI")
-                
+            export_analysis(t1_ghi, t2_ghi, "Est_GHI_Peak", "Estimated Peak")
+               
             t1_poa = df1_medians.loc[df1_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df1_medians.columns and not df1_medians["Median_POA"].isna().all() else None
             t2_poa = df2_medians.loc[df2_medians["Median_POA"].idxmax(), "t_stamp_dt"] if "Median_POA" in df2_medians.columns and not df2_medians["Median_POA"].isna().all() else None
-            export_analysis(t1_poa, t2_poa, "Est_POA")
+            export_analysis(t1_poa, t2_poa, "Est_POA_Peak", "Estimated Peak")
 
     print("\nProcessing Complete.")
 

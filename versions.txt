@@ -10,3 +10,14 @@ Outputs an excel file with the full albeod timeseries.
 V2: Rather uses downloaded specific Alebdo data. Does rations with RHI and GHI2 instead. 
 
 V3 : Limits to be put on axis as this messes uis up 
+
+
+V4: Extended to allow for old 5min data in (because old historian data is gone
+V6: Reads in low res data automaticlaly from the source folders. 
+
+
+GHI and POAV.py:
+
+V13
+Needed to be able to focus in on specific clearsky times for reporting, and not just looking at solar noon. 
+

@@ -20,7 +20,7 @@ RHI_COL_TEMPLATE = "MET{}/RHI"
 TIMESTAMP_COL = "t_stamp" 
 
 START_DATE = '2026-05-02' 
-END_DATE = '2026-05-03'
+END_DATE = '2026-05-27'
 
 # --- Filtering Parameters ---
 START_TIME = "08:00"
